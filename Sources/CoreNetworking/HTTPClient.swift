@@ -64,4 +64,73 @@ public class HTTPClient {
             throw Request.RequestError.unexpectedStatusCode
         }
     }
+
+    /// Executes a request asynchronously and returns a result or throws an error.
+    public func execute<SuccessResponse: Decodable, ErrorResponse: Decodable>(
+        _ request: Request,
+        successResponseType: SuccessResponse.Type,
+        errorResponseType: ErrorResponse.Type
+    ) async throws -> Result<SuccessResponse, ErrorResponse> {
+        networkLogger.logRequest(request)
+        let (data, response) = try await URLSession.shared.data(
+            for: request.urlRequest,
+            delegate: nil
+        )
+
+        guard let response = response as? HTTPURLResponse else {
+            throw Request.RequestError.noResponse
+        }
+        networkLogger.logResponse(response, request: request)
+
+        switch response.statusCode {
+        case 200...299:
+            do {
+                let decodedResponse = try jsonDecoder.decode(
+                    successResponseType,
+                    from: data
+                )
+
+                networkLogger.logDecodingSuccessResponse(
+                    model: decodedResponse,
+                    for: successResponseType,
+                    data: data
+                )
+                return .success(decodedResponse)
+            } catch {
+                networkLogger.logDecodingErrorResponse(
+                    with: error,
+                    for: successResponseType,
+                    data: data
+                )
+
+                guard let decodingError = error as? DecodingError else {
+                    throw Request.RequestError.decode()
+                }
+
+                throw Request.RequestError.decode(decodingError)
+            }
+        case 401:
+            do {
+                let decodedResponse = try jsonDecoder.decode(
+                    errorResponseType,
+                    from: data
+                )
+
+                return .failure(decodedResponse)
+            } catch {
+                throw Request.RequestError.unexpectedStatusCode
+            }
+        default:
+            do {
+                let decodedResponse = try jsonDecoder.decode(
+                    errorResponseType,
+                    from: data
+                )
+
+                return .failure(decodedResponse)
+            } catch {
+                throw Request.RequestError.unexpectedStatusCode
+            }
+        }
+    }
 }
